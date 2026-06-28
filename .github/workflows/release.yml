@@ -93,27 +93,26 @@ jobs:
               [ "$other" = "$arch" ] || conflicts="$conflicts, vohive-core-$other"
             done
 
-            cat > "build/$pkg/control/control" <<EOF
-            Package: $pkg
-            Version: ${VOHIVE_VERSION}-1
-            Architecture: all
-            Maintainer: VoHive
-            Section: utils
-            Priority: optional
-            Conflicts: $conflicts
-            Description: Preinstalled VoHive linux_$arch core binary for luci-app-vohive.
-            EOF
-            sed -i 's/^[[:space:]]*//' "build/$pkg/control/control"
+            {
+              printf 'Package: %s\n' "$pkg"
+              printf 'Version: %s-1\n' "$VOHIVE_VERSION"
+              printf 'Architecture: all\n'
+              printf 'Maintainer: VoHive\n'
+              printf 'Section: utils\n'
+              printf 'Priority: optional\n'
+              printf 'Conflicts: %s\n' "$conflicts"
+              printf 'Description: Preinstalled VoHive linux_%s core binary for luci-app-vohive.\n' "$arch"
+            } > "build/$pkg/control/control"
 
             cat > "build/$pkg/control/postinst" <<'EOF'
-            #!/bin/sh
-            [ -n "${IPKG_INSTROOT}" ] || {
-              if [ -x /etc/init.d/vohive ] && /etc/init.d/vohive running >/dev/null 2>&1; then
-                /etc/init.d/vohive restart || true
-              fi
-            }
-            exit 0
-            EOF
+          #!/bin/sh
+          [ -n "${IPKG_INSTROOT}" ] || {
+            if [ -x /etc/init.d/vohive ] && /etc/init.d/vohive running >/dev/null 2>&1; then
+              /etc/init.d/vohive restart || true
+            fi
+          }
+          exit 0
+          EOF
             chmod 0755 "build/$pkg/control/postinst"
           }
 
