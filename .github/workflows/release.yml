@@ -7,10 +7,6 @@ on:
         description: VoHive release tag
         required: true
         default: v1.4.3
-      sdk_url:
-        description: OpenWrt/ImmortalWrt SDK tarball URL
-        required: false
-        default: https://downloads.immortalwrt.org/releases/24.10.0/targets/mediatek/filogic/immortalwrt-sdk-24.10.0-mediatek-filogic_gcc-13.3.0_musl.Linux-x86_64.tar.zst
       openwrt_arch:
         description: OpenWrt package architecture
         required: true
@@ -25,54 +21,102 @@ jobs:
     permissions:
       contents: write
     env:
+      LUCI_APP_VERSION: 0.1.0
       VOHIVE_VERSION: ${{ github.event.inputs.vohive_version || 'v1.4.3' }}
-      SDK_URL: ${{ github.event.inputs.sdk_url || 'https://downloads.immortalwrt.org/releases/24.10.0/targets/mediatek/filogic/immortalwrt-sdk-24.10.0-mediatek-filogic_gcc-13.3.0_musl.Linux-x86_64.tar.zst' }}
       OPENWRT_ARCH: ${{ github.event.inputs.openwrt_arch || 'aarch64_cortex-a53' }}
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install tools
-        run: sudo apt-get update && sudo apt-get install -y build-essential clang flex bison g++ gawk gcc-multilib gettext git libncurses5-dev libssl-dev rsync unzip zlib1g-dev file wget zstd
+      - name: Install packaging tools
+        run: sudo apt-get update && sudo apt-get install -y binutils file
 
-      - name: Download SDK
+      - name: Prepare package roots
         run: |
-          test -n "$SDK_URL"
-          wget -O sdk.tar.xz "$SDK_URL"
-          mkdir sdk
-          tar -xf sdk.tar.xz -C sdk --strip-components=1
-
-      - name: Copy packages
-        run: |
-          mkdir -p sdk/package/vohive
-          cp -a luci-app-vohive sdk/package/vohive/
-          cp -a vohive-core sdk/package/vohive/
+          set -eu
+          mkdir -p build/luci-app-vohive/control build/luci-app-vohive/data
+          mkdir -p build/vohive-core/control build/vohive-core/data
+          cp -a luci-app-vohive/root/. build/luci-app-vohive/data/
+          mkdir -p build/vohive-core/data/etc/vohive/bin
 
       - name: Download VoHive core
         run: |
+          set -eu
           asset="vohive_${VOHIVE_VERSION}_linux_arm64"
           url="https://github.com/iniwex5/vohive-release/releases/download/${VOHIVE_VERSION}/${asset}"
-          curl -fL --connect-timeout 20 --retry 3 "$url" -o sdk/package/vohive/vohive-core/files/vohive
-          chmod +x sdk/package/vohive/vohive-core/files/vohive
-          file sdk/package/vohive/vohive-core/files/vohive
+          curl -fL --connect-timeout 20 --retry 3 "$url" -o build/vohive-core/data/etc/vohive/bin/vohive
+          chmod 0755 build/vohive-core/data/etc/vohive/bin/vohive
+          printf '%s\n' "$VOHIVE_VERSION" > build/vohive-core/data/etc/vohive/bin/version
+          file build/vohive-core/data/etc/vohive/bin/vohive
 
-      - name: Configure SDK
-        working-directory: sdk
+      - name: Write package metadata
         run: |
-          ./scripts/feeds update -a
-          ./scripts/feeds install -a
-          make defconfig
+          set -eu
+          cat > build/luci-app-vohive/control/control <<EOF
+          Package: luci-app-vohive
+          Version: ${LUCI_APP_VERSION}-1
+          Architecture: all
+          Maintainer: VoHive
+          Section: luci
+          Priority: optional
+          Depends: luci-base, rpcd, rpcd-mod-file, curl, ca-bundle, jsonfilter
+          Description: LuCI management page for installing, configuring, and controlling VoHive.
+          EOF
+          sed -i 's/^[[:space:]]*//' build/luci-app-vohive/control/control
+
+          cat > build/luci-app-vohive/control/conffiles <<EOF
+          /etc/config/vohive
+          EOF
+
+          cat > build/luci-app-vohive/control/postinst <<'EOF'
+          #!/bin/sh
+          [ -n "${IPKG_INSTROOT}" ] || {
+          	mkdir -p /etc/vohive/config /etc/vohive/data /tmp/vohive/logs /tmp/vohive/download
+          }
+          exit 0
+          EOF
+          chmod 0755 build/luci-app-vohive/control/postinst
+
+          cat > build/vohive-core/control/control <<EOF
+          Package: vohive-core
+          Version: ${VOHIVE_VERSION}-1
+          Architecture: ${OPENWRT_ARCH}
+          Maintainer: VoHive
+          Section: utils
+          Priority: optional
+          Description: Preinstalled VoHive core binary for luci-app-vohive.
+          EOF
+          sed -i 's/^[[:space:]]*//' build/vohive-core/control/control
+
+          cat > build/vohive-core/control/postinst <<'EOF'
+          #!/bin/sh
+          [ -n "${IPKG_INSTROOT}" ] || {
+          	if [ -x /etc/init.d/vohive ] && /etc/init.d/vohive running >/dev/null 2>&1; then
+          		/etc/init.d/vohive restart || true
+          	fi
+          }
+          exit 0
+          EOF
+          chmod 0755 build/vohive-core/control/postinst
 
       - name: Build IPKs
-        working-directory: sdk
         run: |
-          make package/vohive/luci-app-vohive/compile V=s
-          make package/vohive/vohive-core/compile V=s VOHIVE_VERSION="${VOHIVE_VERSION}"
-
-      - name: Collect artifacts
-        run: |
+          set -eu
           mkdir -p artifacts
-          find sdk/bin/packages -name 'luci-app-vohive_*.ipk' -exec cp {} artifacts/ \;
-          find sdk/bin/packages -name 'vohive-core_*.ipk' -exec cp {} artifacts/ \;
+          build_ipk() {
+            pkg="$1"
+            version="$2"
+            arch="$3"
+            work="build/$pkg"
+            out="artifacts/${pkg}_${version}_${arch}.ipk"
+
+            printf '2.0\n' > "$work/debian-binary"
+            tar --numeric-owner --owner=0 --group=0 -czf "$work/control.tar.gz" -C "$work/control" .
+            tar --numeric-owner --owner=0 --group=0 -czf "$work/data.tar.gz" -C "$work/data" .
+            (cd "$work" && ar r "../../$out" debian-binary control.tar.gz data.tar.gz)
+          }
+
+          build_ipk luci-app-vohive "${LUCI_APP_VERSION}-1" all
+          build_ipk vohive-core "${VOHIVE_VERSION}-1" "${OPENWRT_ARCH}"
           (cd artifacts && sha256sum *.ipk > sha256sums.txt)
 
       - name: Upload artifacts
