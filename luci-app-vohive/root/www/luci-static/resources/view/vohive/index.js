@@ -247,11 +247,13 @@ return view.extend({
 			warnings.push(E('div', { 'class': 'alert-message warning' }, _('VoHive 核心尚未安装。')));
 
 		return E('div', { 'class': 'cbi-section' }, [
-			E('h3', {}, _('运行状态')),
-			table,
-			E('p', {}, [
-				E('a', { 'class': 'btn', 'target': '_blank', 'href': webUrl }, _('打开 VoHive Web UI'))
-			])
+			E('div', {
+				'style': 'display:flex; align-items:center; justify-content:space-between; gap:1em; flex-wrap:wrap;'
+			}, [
+				E('h3', { 'style': 'margin-bottom:.75em;' }, _('运行状态')),
+				E('a', { 'class': 'btn cbi-button cbi-button-action', 'target': '_blank', 'href': webUrl }, _('打开 VoHive Web UI'))
+			]),
+			table
 		].concat(warnings));
 	},
 
