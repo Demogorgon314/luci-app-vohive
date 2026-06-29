@@ -61,6 +61,20 @@ function progressbar(usedKb, totalKb, percent) {
 	}, E('div', { 'style': 'width:%.2f%%'.format(pc) }));
 }
 
+function memoryText(kb) {
+	var value = parseInt(kb) || 0;
+
+	return value ? '%1024.2mB RSS'.format(value * 1024) : _('未运行');
+}
+
+function cpuMemoryText(status) {
+	var cpuX100 = parseInt(status.cpu_percent_x100);
+	var memoryKb = parseInt(status.memory_used_kb) || 0;
+	var cpu = isNaN(cpuX100) ? ((parseInt(status.cpu_percent) || 0) * 100) : cpuX100;
+
+	return '%.2f%% / %s'.format(cpu / 100, memoryText(memoryKb));
+}
+
 function statusBadge(active) {
 	return E('span', {
 		'style': 'color:%s; font-weight:700;'.format(active ? '#37a24d' : '#d9534f')
@@ -104,6 +118,7 @@ function loadingText(text) {
 return view.extend({
 	logRefreshTimer: null,
 	currentLogs: '',
+	statusNode: null,
 
 	handleSaveApply: function(ev, mode) {
 		return this.super('handleSaveApply', [ ev, mode ]).then(function() {
@@ -415,6 +430,7 @@ return view.extend({
 			[ _('核心状态'), status.core_installed ? releaseLink(releaseRepo, coreVersion) : coreVersion ],
 			[ _('监听地址'), status.running ? E('a', { 'href': webUrl, 'target': '_blank' }, listenAddress) : listenAddress ],
 			[ _('端口状态'), status.port_status || _('未知') ],
+			[ _('CPU / 内存占用'), status.running ? cpuMemoryText(status) : _('未运行') ],
 			[ _('根分区空间'), progressbar(status.root_used_kb, status.root_total_kb, status.root_percent) ],
 			[ _('数据目录空间'), progressbar(status.data_used_kb, status.data_total_kb, status.data_percent) ]
 		];
@@ -438,6 +454,22 @@ return view.extend({
 			]),
 			table
 		].concat(warnings));
+	},
+
+	updateStatusNode: function(status) {
+		if (!this.statusNode)
+			return;
+
+		dom.content(this.statusNode, this.renderStatus(status));
+	},
+
+	refreshStatus: function() {
+		return fs.exec_direct('/usr/share/vohive/status.sh', [])
+			.catch(function() { return '{}'; })
+			.then(function(text) {
+				var status = parseJson(text);
+				this.updateStatusNode(status);
+			}.bind(this));
 	},
 
 	renderServiceButtons: function() {
@@ -576,6 +608,9 @@ return view.extend({
 		return Promise.all([
 			this.renderConfigMap()
 		]).then(function(rendered) {
+			this.statusNode = E('div', {}, this.renderStatus(status));
+			poll.add(this.refreshStatus.bind(this), 5);
+
 			var corePane = E('div', { 'data-tab': 'core', 'data-tab-title': _('核心管理') }, [
 				E('div', { 'class': 'cbi-section' }, E('em', {}, _('点击核心管理后加载版本列表。')))
 			]);
@@ -594,7 +629,7 @@ return view.extend({
 
 			var panes = E('div', {}, [
 				E('div', { 'data-tab': 'home', 'data-tab-title': _('首页') }, [
-					this.renderStatus(status),
+					this.statusNode,
 					this.renderServiceButtons()
 				]),
 				corePane,

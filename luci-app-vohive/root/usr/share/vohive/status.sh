@@ -4,6 +4,7 @@ BIN="/etc/vohive/bin/vohive"
 VERSION_FILE="/etc/vohive/bin/version"
 ARCH_FILE="/etc/vohive/bin/arch"
 BACKUP_VERSION_FILE="/etc/vohive/bin/version.bak"
+METRICS_STATE="/tmp/vohive/status.metrics"
 
 json_escape() {
 	printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g; s/	/\\t/g'
@@ -39,6 +40,116 @@ resolve_asset_arch() {
 			printf 'unknown'
 			;;
 	esac
+}
+
+total_jiffies() {
+	awk '/^cpu / { total=0; for (i=2; i<=NF; i++) total += $i; print total; exit }' /proc/stat 2>/dev/null
+}
+
+vohive_pids() {
+	local pid cmd
+
+	for pid in /proc/[0-9]*; do
+		pid="${pid#/proc/}"
+		cmd="$({ tr '\0' ' ' < "/proc/$pid/cmdline"; } 2>/dev/null || true)"
+		case "$cmd" in
+			*"/etc/vohive/bin/vohive"*) printf '%s\n' "$pid" ;;
+		esac
+	done
+}
+
+process_jiffies() {
+	local total=0 stat utime stime
+
+	for pid in "$@"; do
+		stat="$(cat "/proc/$pid/stat" 2>/dev/null || true)"
+		[ -n "$stat" ] || continue
+		utime="$(printf '%s\n' "$stat" | awk '{print $14}')"
+		stime="$(printf '%s\n' "$stat" | awk '{print $15}')"
+		total=$((total + ${utime:-0} + ${stime:-0}))
+	done
+
+	printf '%s\n' "$total"
+}
+
+process_rss_kb() {
+	local total=0 rss
+
+	for pid in "$@"; do
+		rss="$(awk '/^VmRSS:/ {print $2; exit}' "/proc/$pid/status" 2>/dev/null || true)"
+		total=$((total + ${rss:-0}))
+	done
+
+	printf '%s\n' "$total"
+}
+
+mem_total_kb() {
+	awk '/^MemTotal:/ {print $2; exit}' /proc/meminfo 2>/dev/null
+}
+
+collect_process_metrics() {
+	local pids pid_count mem_total mem_used mem_percent cpu_percent cpu_percent_x100
+	local proc_now total_now prev_proc prev_total proc_delta total_delta
+
+	pids="$(vohive_pids)"
+	if [ -z "$pids" ]; then
+		mkdir -p "${METRICS_STATE%/*}"
+		printf '0 %s\n' "$(total_jiffies || printf 0)" > "$METRICS_STATE"
+		printf '"process_count":0,'
+		printf '"cpu_percent":0,'
+		printf '"cpu_percent_x100":0,'
+		printf '"memory_used_kb":0,'
+		printf '"memory_total_kb":%s,' "$(mem_total_kb || printf 0)"
+		printf '"memory_percent":0,'
+		return
+	fi
+
+	# shellcheck disable=SC2086
+	set -- $pids
+	pid_count="$#"
+	mem_total="$(mem_total_kb || printf 0)"
+	mem_used="$(process_rss_kb "$@")"
+	if [ "${mem_total:-0}" -gt 0 ]; then
+		mem_percent=$((mem_used * 100 / mem_total))
+	else
+		mem_percent=0
+	fi
+
+	proc_now="$(process_jiffies "$@")"
+	total_now="$(total_jiffies || printf 0)"
+	if [ -s "$METRICS_STATE" ]; then
+		read -r prev_proc prev_total < "$METRICS_STATE" || {
+			prev_proc="$proc_now"
+			prev_total="$total_now"
+		}
+	else
+		prev_proc="$proc_now"
+		prev_total="$total_now"
+	fi
+	case "$prev_proc" in *[!0-9]*|'') prev_proc="$proc_now" ;; esac
+	case "$prev_total" in *[!0-9]*|'') prev_total="$total_now" ;; esac
+	case "$proc_now" in *[!0-9]*|'') proc_now=0 ;; esac
+	case "$total_now" in *[!0-9]*|'') total_now=0 ;; esac
+
+	mkdir -p "${METRICS_STATE%/*}"
+	printf '%s %s\n' "$proc_now" "$total_now" > "$METRICS_STATE"
+
+	proc_delta=$((proc_now - prev_proc))
+	total_delta=$((total_now - prev_total))
+	if [ "$total_delta" -gt 0 ] && [ "$proc_delta" -ge 0 ]; then
+		cpu_percent_x100=$((proc_delta * 10000 / total_delta))
+		cpu_percent=$((cpu_percent_x100 / 100))
+	else
+		cpu_percent=0
+		cpu_percent_x100=0
+	fi
+
+	printf '"process_count":%s,' "$pid_count"
+	printf '"cpu_percent":%s,' "$cpu_percent"
+	printf '"cpu_percent_x100":%s,' "$cpu_percent_x100"
+	printf '"memory_used_kb":%s,' "$mem_used"
+	printf '"memory_total_kb":%s,' "${mem_total:-0}"
+	printf '"memory_percent":%s,' "$mem_percent"
 }
 
 is_running=0
@@ -126,6 +237,7 @@ printf '"port":"%s",' "$(json_escape "$port")"
 printf '"data_path":"%s",' "$(json_escape "$data_path")"
 printf '"default_password":%s,' "$default_password"
 printf '"port_status":"%s",' "$port_status"
+collect_process_metrics
 df_json_fields root /
 df_json_fields data "$data_path"
 printf '"root_space":"%s",' "$(json_escape "${root_avail_kb:-}")"
