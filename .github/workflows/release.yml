@@ -41,8 +41,19 @@ jobs:
             luci_version="0.0.0-dev"
           fi
 
+          previous_tag="$(git tag --sort=-v:refname --merged HEAD | grep -v "^${tag_name}$" | head -n 1 || true)"
+
           {
             echo "## VoHive LuCI ${luci_version}"
+            echo
+            echo "### 更新日志"
+            echo
+            if [ -n "$previous_tag" ]; then
+              git log --pretty=format:'- %s (%h)' "${previous_tag}..HEAD"
+            else
+              git log --pretty=format:'- %s (%h)' -n 20
+            fi
+            echo
             echo
             echo "### 安装包说明"
             echo
@@ -61,6 +72,10 @@ jobs:
             echo "- aarch64 / arm64 路由器选择 arm64"
             echo "- x86_64 / amd64 设备选择 amd64"
             echo "- armv7l / armv7 设备选择 armv7"
+            echo
+            if [ -n "$previous_tag" ]; then
+              echo "完整对比: https://github.com/${GITHUB_REPOSITORY}/compare/${previous_tag}...${tag_name}"
+            fi
           } > release-notes.md
 
           echo "tag_name=${tag_name}" >> "$GITHUB_OUTPUT"
