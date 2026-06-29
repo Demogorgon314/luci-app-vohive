@@ -63,7 +63,7 @@ armv7l / armv7  -> armv7
 
 ## 发布构建
 
-推送 `v*` tag 会触发 GitHub Action 生成 IPK 包：
+推送 `v*` tag 会触发 GitHub Action，用 OpenWrt SDK 标准打包流程生成 `.ipk` 与 `.apk`：
 
 ```sh
 git tag v0.1.2
@@ -77,6 +77,7 @@ luci-app-vohive_<version>-r1_all.ipk
 vohive-core-arm64_v1.4.3-r1_all.ipk
 vohive-core-amd64_v1.4.3-r1_all.ipk
 vohive-core-armv7_v1.4.3-r1_all.ipk
+对应的 OpenWrt 25 apk 包
 sha256sums.txt
 ```
 
@@ -86,9 +87,7 @@ sha256sums.txt
 
 ```sh
 make package/vohive/luci-app-vohive/compile V=s PKG_VERSION=0.1.2
-make package/vohive/vohive-core/compile V=s VOHIVE_VERSION=v1.4.3 VOHIVE_ASSET_ARCH=arm64
-make package/vohive/vohive-core/compile V=s VOHIVE_VERSION=v1.4.3 VOHIVE_ASSET_ARCH=amd64
-make package/vohive/vohive-core/compile V=s VOHIVE_VERSION=v1.4.3 VOHIVE_ASSET_ARCH=armv7
+make package/vohive/vohive-core/compile V=s VOHIVE_VERSION=v1.4.3
 ```
 
 ## TODO

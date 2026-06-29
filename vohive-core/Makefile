@@ -1,37 +1,61 @@
 include $(TOPDIR)/rules.mk
 
-VOHIVE_ASSET_ARCH:=$(if $(VOHIVE_ASSET_ARCH),$(VOHIVE_ASSET_ARCH),arm64)
-PKG_NAME:=vohive-core-$(VOHIVE_ASSET_ARCH)
+PKG_NAME:=vohive-core
 PKG_VERSION:=$(if $(VOHIVE_VERSION),$(VOHIVE_VERSION),v1.4.3)
 PKG_RELEASE:=1
 PKG_LICENSE:=Proprietary
 PKG_MAINTAINER:=VoHive
+PKGARCH:=all
 
 include $(INCLUDE_DIR)/package.mk
 
-define Package/$(PKG_NAME)
+define Package/vohive-core/Default
   SECTION:=utils
   CATEGORY:=Utilities
-  TITLE:=VoHive core binary ($(VOHIVE_ASSET_ARCH))
   DEPENDS:=
-  CONFLICTS:=$(filter-out $(PKG_NAME),vohive-core vohive-core-arm64 vohive-core-amd64 vohive-core-armv7)
 endef
 
-define Package/$(PKG_NAME)/description
-  Preinstalled VoHive linux_$(VOHIVE_ASSET_ARCH) core binary for luci-app-vohive.
+define Package/vohive-core-arm64
+  $(call Package/vohive-core/Default)
+  TITLE:=VoHive core binary (arm64)
+  CONFLICTS:=vohive-core vohive-core-amd64 vohive-core-armv7
+endef
+
+define Package/vohive-core-amd64
+  $(call Package/vohive-core/Default)
+  TITLE:=VoHive core binary (amd64)
+  CONFLICTS:=vohive-core vohive-core-arm64 vohive-core-armv7
+endef
+
+define Package/vohive-core-armv7
+  $(call Package/vohive-core/Default)
+  TITLE:=VoHive core binary (armv7)
+  CONFLICTS:=vohive-core vohive-core-arm64 vohive-core-amd64
+endef
+
+define Package/vohive-core-arm64/description
+  Preinstalled VoHive linux_arm64 core binary for luci-app-vohive.
+endef
+
+define Package/vohive-core-amd64/description
+  Preinstalled VoHive linux_amd64 core binary for luci-app-vohive.
+endef
+
+define Package/vohive-core-armv7/description
+  Preinstalled VoHive linux_armv7 core binary for luci-app-vohive.
 endef
 
 define Build/Compile
 endef
 
-define Package/$(PKG_NAME)/install
+define Package/vohive-core/install
 	$(INSTALL_DIR) $(1)/etc/vohive/bin
-	$(INSTALL_BIN) ./files/vohive $(1)/etc/vohive/bin/vohive
+	$(INSTALL_BIN) ./files/vohive-$(2) $(1)/etc/vohive/bin/vohive
 	echo "$(PKG_VERSION)" > $(1)/etc/vohive/bin/version
-	echo "$(VOHIVE_ASSET_ARCH)" > $(1)/etc/vohive/bin/arch
+	echo "$(2)" > $(1)/etc/vohive/bin/arch
 endef
 
-define Package/$(PKG_NAME)/postinst
+define Package/vohive-core/postinst
 #!/bin/sh
 [ -n "$${IPKG_INSTROOT}" ] || {
 	if [ -x /etc/init.d/vohive ] && /etc/init.d/vohive running >/dev/null 2>&1; then
@@ -41,4 +65,30 @@ define Package/$(PKG_NAME)/postinst
 exit 0
 endef
 
-$(eval $(call BuildPackage,$(PKG_NAME)))
+define Package/vohive-core-arm64/install
+	$(call Package/vohive-core/install,$(1),arm64)
+endef
+
+define Package/vohive-core-amd64/install
+	$(call Package/vohive-core/install,$(1),amd64)
+endef
+
+define Package/vohive-core-armv7/install
+	$(call Package/vohive-core/install,$(1),armv7)
+endef
+
+define Package/vohive-core-arm64/postinst
+$(Package/vohive-core/postinst)
+endef
+
+define Package/vohive-core-amd64/postinst
+$(Package/vohive-core/postinst)
+endef
+
+define Package/vohive-core-armv7/postinst
+$(Package/vohive-core/postinst)
+endef
+
+$(eval $(call BuildPackage,vohive-core-arm64))
+$(eval $(call BuildPackage,vohive-core-amd64))
+$(eval $(call BuildPackage,vohive-core-armv7))
