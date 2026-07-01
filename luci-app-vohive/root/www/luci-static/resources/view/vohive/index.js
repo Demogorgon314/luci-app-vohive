@@ -160,6 +160,8 @@ function taskTitle(type) {
 		return _('转换模块 USB 身份');
 	case 'switch_usbnet':
 		return _('切换模块 USB 网络模式');
+	case 'probe_device':
+		return _('探测设备');
 	default:
 		return _('更新任务');
 	}
@@ -223,6 +225,8 @@ return view.extend({
 		return fs.exec_direct('/usr/share/vohive/task_status.sh', [])
 			.then(function(text) {
 				var status = parseJson(text);
+				if (status && status.type == 'probe_device')
+					return;
 				if (status && (status.state == 'running' || status.state == 'starting') && status.id)
 					this.showTaskDialog(status.id, status.type, status);
 			}.bind(this))

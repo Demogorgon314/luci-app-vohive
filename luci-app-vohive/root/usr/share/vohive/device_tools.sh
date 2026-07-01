@@ -159,6 +159,118 @@ clean_at_value() {
 		sed 's/[[:space:]][[:space:]]*/ /g; s/^[[:space:]]*//; s/[[:space:]]*$//'
 }
 
+first_non_empty() {
+	local value
+
+	for value in "$@"; do
+		[ -n "$value" ] && {
+			printf '%s' "$value"
+			return 0
+		}
+	done
+}
+
+extract_after_colon() {
+	printf '%s\n' "$1" |
+		sed -n 's/^[[:space:]]*+[^:]*:[[:space:]]*//p' |
+		head -n 1 |
+		sed 's/^"//; s/"$//; s/^[[:space:]]*//; s/[[:space:]]*$//'
+}
+
+extract_cpin_status() {
+	extract_after_colon "$1"
+}
+
+extract_qccid_value() {
+	extract_after_colon "$1" | tr -d '" ' | sed 's/[Ff]$//'
+}
+
+extract_cgpaddr_value() {
+	local ip
+
+	ip="$(printf '%s\n' "$1" | grep -Eo '([0-9]{1,3}\.){3}[0-9]{1,3}' | head -n 1)"
+	[ -n "$ip" ] && {
+		printf '%s' "$ip"
+		return 0
+	}
+	extract_after_colon "$1"
+}
+
+extract_qtemp_value() {
+	local temps value out sep
+
+	temps="$(extract_after_colon "$1")"
+	[ -n "$temps" ] || return 0
+
+	out=""
+	sep=""
+	IFS=","
+	for value in $temps; do
+		value="$(printf '%s' "$value" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
+		[ -n "$value" ] || continue
+		out="${out}${sep}${value}°C"
+		sep=" / "
+	done
+	unset IFS
+	printf '%s' "$out"
+}
+
+extract_csq_value() {
+	local line rssi ber dbm quality ber_text
+
+	line="$(printf '%s\n' "$1" | sed -n 's/^[[:space:]]*+CSQ:[[:space:]]*\([0-9][0-9]*\)[[:space:]]*,[[:space:]]*\([0-9][0-9]*\).*/\1 \2/p' | head -n 1)"
+	[ -n "$line" ] || {
+		clean_at_value "$1"
+		return 0
+	}
+
+	rssi="${line%% *}"
+	ber="${line#* }"
+	if [ "$rssi" = "99" ]; then
+		quality="未知"
+		dbm="未知"
+	else
+		dbm=$((2 * rssi - 113))
+		if [ "$rssi" -ge 20 ]; then
+			quality="优秀"
+		elif [ "$rssi" -ge 15 ]; then
+			quality="良好"
+		elif [ "$rssi" -ge 10 ]; then
+			quality="一般"
+		else
+			quality="较弱"
+		fi
+	fi
+
+	if [ "$ber" = "99" ]; then
+		ber_text="误码率未知"
+	else
+		ber_text="误码率 $ber"
+	fi
+
+	if [ "$dbm" = "未知" ]; then
+		printf '%s (%s/31，%s)' "$quality" "$rssi" "$ber_text"
+	else
+		printf '%s · %s dBm (%s/31，%s)' "$quality" "$dbm" "$rssi" "$ber_text"
+	fi
+}
+
+extract_operator_value() {
+	local value
+
+	value="$(printf '%s\n' "$1" | sed -n 's/^[[:space:]]*+QSPN:[[:space:]]*["'\'']\([^"'\'']*\)["'\''].*/\1/p' | head -n 1)"
+	[ -n "$value" ] && {
+		printf '%s' "$value"
+		return 0
+	}
+	value="$(printf '%s\n' "$1" | sed -n 's/^[[:space:]]*+COPS:[^"'\'']*["'\'']\([^"'\'']*\)["'\''].*/\1/p' | head -n 1)"
+	[ -n "$value" ] && {
+		printf '%s' "$value"
+		return 0
+	}
+	clean_at_value "$1"
+}
+
 extract_usb_cfg() {
 	printf '%s\n' "$1" | grep -Eio '0x[0-9a-f]{4}[, ]+0x[0-9a-f]{4}' | head -n 1 | tr '[:lower:]' '[:upper:]'
 }
@@ -338,9 +450,10 @@ probe_port_json() {
 	local full="${2:-0}"
 	local allow_config="${3:-0}"
 	local probe_at="${4:-1}"
-	local at ati cgmi cgmm cgmr cgsn qccid cpin csq qnwinfo qspn qtemp cgpaddr qcfg qnet
+	local at ati cgmi cgmm cgmr cgsn qccid cpin csq qnwinfo qspn cops qtemp cgpaddr qcfg qnet
 	local cfg cfg_identity vidpid vidpid_identity manufacturer product serial usbnet usbnet_name ifnum profile
 	local status module can_config mismatch output safe_output first primary_at
+	local sim_status operator_status imei_value iccid_value ip_value temp_value signal_value
 
 	at=""
 	status="no_response"
@@ -381,9 +494,16 @@ probe_port_json() {
 			cgmi="$(at_query "$port" AT+CGMI 2)"
 			cgmm="$(at_query "$port" AT+CGMM 2)"
 			cgmr="$(at_query "$port" AT+CGMR 2)"
+			cgsn="$(at_query "$port" AT+CGSN 2)"
+			qccid="$(at_query "$port" AT+QCCID 2)"
+			cpin="$(at_query "$port" 'AT+CPIN?' 2)"
 			csq="$(at_query "$port" AT+CSQ 2)"
 			qnwinfo="$(at_query "$port" AT+QNWINFO 2)"
-			output="AT:\n$at\n\nATI:\n$ati\n\nAT+CGMI:\n$cgmi\n\nAT+CGMM:\n$cgmm\n\nAT+CGMR:\n$cgmr\n\nAT+CSQ:\n$csq\n\nAT+QNWINFO:\n$qnwinfo\n\nAT+QCFG=\"usbcfg\":\n$qcfg\n\nAT+QCFG=\"usbnet\":\n$qnet"
+			qspn="$(at_query "$port" AT+QSPN 2)"
+			cops="$(at_query "$port" 'AT+COPS?' 2)"
+			qtemp="$(at_query "$port" AT+QTEMP 2)"
+			cgpaddr="$(at_query "$port" AT+CGPADDR=1 2)"
+			output="AT:\n$at\n\nATI:\n$ati\n\nAT+CGMI:\n$cgmi\n\nAT+CGMM:\n$cgmm\n\nAT+CGMR:\n$cgmr\n\nAT+CGSN:\n$cgsn\n\nAT+QCCID:\n$qccid\n\nAT+CPIN?:\n$cpin\n\nAT+CSQ:\n$csq\n\nAT+QNWINFO:\n$qnwinfo\n\nAT+QSPN:\n$qspn\n\nAT+COPS?:\n$cops\n\nAT+QTEMP:\n$qtemp\n\nAT+CGPADDR=1:\n$cgpaddr\n\nAT+QCFG=\"usbcfg\":\n$qcfg\n\nAT+QCFG=\"usbnet\":\n$qnet"
 		fi
 
 		cfg="$(extract_usb_cfg "$qcfg")"
@@ -407,6 +527,14 @@ probe_port_json() {
 		fi
 		[ "$cfg_identity" != "unknown" ] && [ "$vidpid_identity" != "unknown" ] && [ "$cfg_identity" != "$vidpid_identity" ] && mismatch=true
 	fi
+
+	sim_status="$(first_non_empty "$(extract_cpin_status "$cpin")" "$(clean_at_value "$cpin")")"
+	operator_status="$(first_non_empty "$(extract_operator_value "$qspn")" "$(extract_operator_value "$cops")")"
+	imei_value="$(clean_at_value "$cgsn")"
+	iccid_value="$(first_non_empty "$(extract_qccid_value "$qccid")" "$(clean_at_value "$qccid")")"
+	ip_value="$(first_non_empty "$(extract_cgpaddr_value "$cgpaddr")" "$(clean_at_value "$cgpaddr")")"
+	temp_value="$(first_non_empty "$(extract_qtemp_value "$qtemp")" "$(clean_at_value "$qtemp")")"
+	signal_value="$(extract_csq_value "$csq")"
 
 	printf '{'
 	json_field port "$port"; printf ','
@@ -432,18 +560,18 @@ probe_port_json() {
 	json_field vendor "$(clean_at_value "$cgmi")"; printf ','
 	json_field model "$(clean_at_value "$cgmm")"; printf ','
 	json_field firmware "$(clean_at_value "$cgmr")"; printf ','
-	json_field sim "$(clean_at_value "$cpin")"; printf ','
-	json_field signal "$(clean_at_value "$csq")"; printf ','
+	json_field sim "$sim_status"; printf ','
+	json_field signal "$signal_value"; printf ','
 	json_field network "$(clean_at_value "$qnwinfo")"; printf ','
-	json_field operator "$(clean_at_value "$qspn")"
+	json_field operator "$operator_status"
 	printf '},'
 	printf '"details":['
 	first=1
 	for pair in \
-		"IMEI|$(clean_at_value "$cgsn")" \
-		"ICCID|$(clean_at_value "$qccid")" \
-		"IP 地址|$(clean_at_value "$cgpaddr")" \
-		"温度|$(clean_at_value "$qtemp")" \
+		"IMEI|$imei_value" \
+		"ICCID|$iccid_value" \
+		"IP 地址|$ip_value" \
+		"温度|$temp_value" \
 		"USB 产品|$manufacturer $product" \
 		"USB 序列号|$serial"
 	do
